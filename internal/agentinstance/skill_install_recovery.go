@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/compozy/compozy/internal/dirpublish"
 	"github.com/compozy/compozy/internal/fileutil"
@@ -137,9 +138,11 @@ func (p *skillRecoveryPolicy) RecoverLayout(
 		return dirpublish.RecoveryError("decode skill install payload", err)
 	}
 	switch {
-	case payload.State == skillInstallStateConflict || payload.State == skillInstallStateResolving:
+	case payload.State == skillInstallStateConflict:
 		p.blocked = &payload
 		return nil
+	case payload.State == skillInstallStateResolving:
+		return p.resume(journal, payload)
 	case journal.Phase == dirpublish.PhasePublished:
 		if err := finalizeSkillOp(p.t, journal, payload); err != nil {
 			return dirpublish.RecoveryError("finalize committed skill install", err)
@@ -205,35 +208,17 @@ func (p *skillRecoveryPolicy) finishRollback(journal dirpublish.Journal, payload
 // stays in the backup slot, in the verified original copy, or is absent. The journal is kept with
 // state = conflict until the operator resolves it.
 func (p *skillRecoveryPolicy) conflict(journal dirpublish.Journal, payload SkillInstallPayload) error {
-	target, err := skillTreeState(p.t.dir)
+	payload, err := p.normalizeConflictLayout(journal, payload)
 	if err != nil {
-		return dirpublish.RecoveryError("inspect conflicting skill target", err)
-	}
-	backup, err := skillTreeState(p.t.path(journal.BackupName))
-	if err != nil {
-		return dirpublish.RecoveryError("inspect conflicting skill backup", err)
-	}
-	copyValid := p.originalCopyValid(payload)
-	original := expectedSkillOriginal(payload)
-	targetExplained := target == "" || target == original ||
-		(payload.StagedDigest != "" && target == payload.StagedDigest)
-	if targetExplained && backup != "" && backup != original {
-		if copyValid, err = p.moveEditedToTarget(journal, payload, target, copyValid); err != nil {
-			return err
-		}
-		backup = ""
-	}
-	payload.OriginalSource = skillOriginalAbsent
-	switch {
-	case payload.PreExists && backup == payload.PreDigest:
-		payload.OriginalSource = skillOriginalInBackup
-	case payload.PreExists && copyValid:
-		payload.OriginalSource = skillOriginalInCopy
+		return err
 	}
 	if err := removeSkillOpLeftovers(p.t, journal, payload, payload.OriginalSource != skillOriginalInCopy); err != nil {
 		return dirpublish.RecoveryError("clean conflicting skill install", err)
 	}
 	payload.State = skillInstallStateConflict
+	if payload.ConflictAt.IsZero() {
+		payload.ConflictAt = time.Now().UTC()
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -243,10 +228,79 @@ func (p *skillRecoveryPolicy) conflict(journal dirpublish.Journal, payload Skill
 		return dirpublish.RecoveryError("record skill install conflict", err)
 	}
 	slog.WarnContext(p.ctx, "skill.install.conflict", "op_id", payload.OpID, "skill", p.t.name,
-		"review_id", payload.ReviewID, "action", payload.Action, "original_source", payload.OriginalSource)
+		"review_id", payload.ReviewID, "action", payload.Action, "original_source", payload.OriginalSource,
+		"retained_backup", payload.RetainedBackupName)
 	p.logged(payload, "conflict")
 	p.blocked = &payload
 	return nil
+}
+
+// retainBackup moves unexplained contents out of the backup slot when move is set, which happens
+// when the target holds unexplained contents too: both trees then survive any resolution (Safety
+// Invariant 6). It returns the retained sibling's name when that sibling exists, so a conflict
+// normalized again after a crash still records it.
+func (p *skillRecoveryPolicy) retainBackup(journal dirpublish.Journal, opID string, move bool) (string, error) {
+	name := skillConflictCopyPrefix + opID + "-backup"
+	if move {
+		if err := moveSkillChild(p.t.parent, journal.BackupName, name); err != nil {
+			return "", dirpublish.RecoveryError("retain conflicting skill backup", err)
+		}
+	}
+	retained, err := dirpublish.DirectoryExists(p.t.parent, name)
+	if err != nil {
+		return "", dirpublish.RecoveryError("inspect retained skill backup", err)
+	}
+	if !retained {
+		return "", nil
+	}
+	return name, nil
+}
+
+// normalizeConflictLayout moves the trees of a conflict into place and records where the original
+// and any retained backup contents are.
+func (p *skillRecoveryPolicy) normalizeConflictLayout(
+	journal dirpublish.Journal,
+	payload SkillInstallPayload,
+) (SkillInstallPayload, error) {
+	target, err := skillTreeState(p.t.dir)
+	if err != nil {
+		return payload, dirpublish.RecoveryError("inspect conflicting skill target", err)
+	}
+	backup, err := skillTreeState(p.t.path(journal.BackupName))
+	if err != nil {
+		return payload, dirpublish.RecoveryError("inspect conflicting skill backup", err)
+	}
+	copyValid := p.originalCopyValid(payload)
+	original := expectedSkillOriginal(payload)
+	targetExplained := target == "" || target == original ||
+		(payload.StagedDigest != "" && target == payload.StagedDigest)
+	backupUnexplained := backup != "" && backup != original
+	if targetExplained && backupUnexplained {
+		if copyValid, err = p.moveEditedToTarget(journal, payload, target, copyValid); err != nil {
+			return payload, err
+		}
+		backup = ""
+	}
+	if payload.RetainedBackupName, err = p.retainBackup(journal, payload.OpID,
+		!targetExplained && backupUnexplained); err != nil {
+		return payload, err
+	}
+	if payload.RetainedBackupName != "" {
+		backup = ""
+	}
+	payload.OriginalSource = conflictOriginalSource(payload, backup, copyValid)
+	return payload, nil
+}
+
+// conflictOriginalSource locates the original of a conflict given the backup slot's digest.
+func conflictOriginalSource(payload SkillInstallPayload, backup string, copyValid bool) string {
+	switch {
+	case payload.PreExists && backup == payload.PreDigest:
+		return skillOriginalInBackup
+	case payload.PreExists && copyValid:
+		return skillOriginalInCopy
+	}
+	return skillOriginalAbsent
 }
 
 func (p *skillRecoveryPolicy) originalCopyValid(payload SkillInstallPayload) bool {

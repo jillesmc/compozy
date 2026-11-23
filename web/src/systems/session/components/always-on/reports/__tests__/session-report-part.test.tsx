@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UIProvider } from "@compozy/ui";
@@ -81,6 +81,23 @@ vi.mock("@/lib/user-feedback", async importOriginal => ({
 vi.mock("@tanstack/react-router", async importOriginal => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => reads.navigate,
+  // A plain anchor keeps the browser's modifier and middle clicks; the router owns navigation.
+  Link: ({
+    to,
+    params,
+    children,
+    ...props
+  }: AnchorHTMLAttributes<HTMLAnchorElement> & { to: string; params?: Record<string, string> }) => (
+    <a
+      href={Object.entries(params ?? {}).reduce(
+        (path, [key, value]) => path.replace(`$${key}`, encodeURIComponent(value)),
+        to
+      )}
+      {...props}
+    >
+      {children}
+    </a>
+  ),
 }));
 
 function harness(send: ((text: string) => void) | null, shared?: QueryClient) {
@@ -726,6 +743,30 @@ describe("SessionReportPart skill review", () => {
       "sha256:one"
     );
     expect(await screen.findByText(/You rejected/)).toBeInTheDocument();
+  });
+
+  it("Should name the conflict to resolve when the skill changed during an install [UT-066]", async () => {
+    const { AgentSkillReviewApiError } =
+      await import("@/systems/agent/adapters/agent-skill-review-api");
+    skillReviews.fetch.mockResolvedValue(skillReview());
+    skillReviews.decide.mockRejectedValueOnce(
+      new AgentSkillReviewApiError(
+        "skill_install_conflict: triage-sync changed while it was being replaced (op sop_01JCA2W8NQ); run `compozy agent skill install-conflict resolve sop_01JCA2W8NQ --keep current|previous`",
+        409,
+        "skill_install_conflict"
+      )
+    );
+    render(<SessionReportPart data={SKILL_REPORT} />, { wrapper: harness(vi.fn()) });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Review skill" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+
+    const alert = await screen.findByTestId("skill-review-install-conflict");
+    expect(alert).toHaveTextContent(
+      "This skill changed while it was being replaced. Resolve it with compozy agent skill install-conflict resolve sop_01JCA2W8NQ."
+    );
+    expect(screen.queryByText(/skill_install_conflict:/)).toBeNull();
+    expect(screen.queryByTestId("skill-review-stale")).toBeNull();
   });
 
   it("Should offer only Reject for a review whose draft can't be read [UT-059]", async () => {

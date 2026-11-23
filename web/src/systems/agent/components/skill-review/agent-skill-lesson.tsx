@@ -1,13 +1,12 @@
 /** S2: the lesson a skill proposal carries, with links to the sessions that show it. */
-import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import { Eyebrow, Pill } from "@compozy/ui";
 
-import { SessionNotFoundError, sessionOwnerOptions } from "@/systems/session";
-
 import type { AgentSkillLessonPayload } from "../../types";
+
+const NO_UNAVAILABLE_SESSIONS: readonly string[] = [];
 
 const CONFIDENCE_LABEL: Readonly<Record<string, string>> = {
   low: "Low confidence",
@@ -15,11 +14,9 @@ const CONFIDENCE_LABEL: Readonly<Record<string, string>> = {
   high: "High confidence",
 };
 
-/** A session the daemon no longer knows reads as unavailable; any other failure keeps the link. */
-function EvidenceSession({ id }: { id: string }) {
-  const navigate = useNavigate();
-  const owner = useQuery({ ...sessionOwnerOptions(id), refetchOnWindowFocus: false });
-  if (owner.error instanceof SessionNotFoundError) {
+/** A session the daemon no longer knows reads as unavailable; any other session stays a link. */
+function EvidenceSession({ id, unavailable }: { id: string; unavailable: boolean }) {
+  if (unavailable) {
     return (
       <span className="font-mono text-small-body text-muted-foreground">
         {id} <span className="font-sans">· Unavailable</span>
@@ -27,16 +24,13 @@ function EvidenceSession({ id }: { id: string }) {
     );
   }
   return (
-    <a
+    <Link
       className="rounded-xs font-mono text-small-body text-fg underline outline-none focus-visible:shadow-focus-ring"
-      href={`/session/${encodeURIComponent(id)}`}
-      onClick={event => {
-        event.preventDefault();
-        void navigate({ to: "/session/$id", params: { id } });
-      }}
+      params={{ id }}
+      to="/session/$id"
     >
       {id}
-    </a>
+    </Link>
   );
 }
 
@@ -52,9 +46,12 @@ function LessonRow({ label, children }: { label: string; children: ReactNode }) 
 export function AgentSkillLesson({
   lesson,
   evidenceSessionIds,
+  unavailableSessionIds = NO_UNAVAILABLE_SESSIONS,
 }: {
   lesson: AgentSkillLessonPayload | null | undefined;
   evidenceSessionIds: readonly string[];
+  /** Evidence sessions the daemon no longer knows; the container resolves them. */
+  unavailableSessionIds?: readonly string[];
 }) {
   if (!lesson) {
     return (
@@ -80,7 +77,7 @@ export function AgentSkillLesson({
             <ul className="flex flex-wrap gap-x-3 gap-y-1">
               {evidenceSessionIds.map(id => (
                 <li key={id}>
-                  <EvidenceSession id={id} />
+                  <EvidenceSession id={id} unavailable={unavailableSessionIds.includes(id)} />
                 </li>
               ))}
             </ul>

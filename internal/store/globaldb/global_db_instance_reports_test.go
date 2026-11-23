@@ -210,6 +210,19 @@ func TestInstanceSkillReviewLedger(t *testing.T) {
 		if err != nil || approved.State != "approved" || approved.DecidedVia != "operator" {
 			t.Fatalf("approval ledger: %+v %v", approved, err)
 		}
+		// Business Rule 4: approved contents are installed, so proposing them again is refused
+		// instead of opening another pending review.
+		if again, err := service.Propose(ctx, operator, instance, scanRoot, input); !errors.Is(
+			err,
+			agentinstance.ErrSkillProposeNameTaken,
+		) {
+			t.Fatalf("reproposal of installed contents: %+v %v", again, err)
+		}
+		if pending, err := service.Reviews(
+			ctx, operator, instance, agentinstance.SkillReviewQuery{State: "pending", Limit: 10},
+		); err != nil || len(pending) != 0 {
+			t.Fatalf("pending after refused reproposal: %+v %v", pending, err)
+		}
 	})
 	t.Run("Should keep a committed install and project it on the next reconcile [UT-069]", func(t *testing.T) {
 		t.Parallel()
@@ -349,6 +362,7 @@ func TestInstanceSkillReviewLedger(t *testing.T) {
 		input := sqlcgen.InsertAgentSkillReviewParams{
 			InstanceID: "review-instance", ProfileID: store.DefaultProfileID,
 			SkillName: "review-skill", DraftPath: "/drafts/skill", CreatedAt: "2026-11-03T00:00:00Z",
+			Kind: "new", Lesson: "{}", EvidenceSessionIds: "[]",
 		}
 		for i := range 6 {
 			input.ID = fmt.Sprintf("review-%d", i)
@@ -362,8 +376,8 @@ func TestInstanceSkillReviewLedger(t *testing.T) {
 				t.Fatalf("insert %d: count=%d err=%v", i, count, err)
 			}
 		}
-		count, err := q.DecideAgentSkillReview(ctx, sqlcgen.DecideAgentSkillReviewParams{
-			ID: "review-0", Digest: "digest-0", State: "rejected", DecidedBy: "operator",
+		count, err := q.RejectAgentSkillReview(ctx, sqlcgen.RejectAgentSkillReviewParams{
+			ID: "review-0", Digest: "digest-0", DecidedBy: "operator",
 		})
 		if err != nil || count != 1 {
 			t.Fatalf("reject: count=%d err=%v", count, err)

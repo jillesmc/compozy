@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -75,6 +77,11 @@ func (s *SkillProposalService) Propose(
 	if err != nil {
 		return SkillProposalResult{}, err
 	}
+	// Checked before the lock too, whose path resolution would reject a symlink leaving the root
+	// before the name is judged.
+	if err := refuseInstalledName(targetRoot, draft.Name); err != nil {
+		return SkillProposalResult{}, err
+	}
 	if err := s.checkEvidenceSessions(ctx, instance, evidence); err != nil {
 		return SkillProposalResult{}, err
 	}
@@ -83,6 +90,10 @@ func (s *SkillProposalService) Propose(
 		return SkillProposalResult{}, err
 	}
 	defer func() { err = errors.Join(err, t.close()) }()
+	// Checked again after Reconcile so an interrupted install is settled before the name is judged.
+	if err := refuseInstalledName(targetRoot, draft.Name); err != nil {
+		return SkillProposalResult{}, err
+	}
 	id, err := store.NewID("skr")
 	if err != nil {
 		return SkillProposalResult{}, err
@@ -121,6 +132,18 @@ func (s *SkillProposalService) Propose(
 	}
 	// An uncertain database commit must retain the inert draft for recovery.
 	return result, err
+}
+
+// refuseInstalledName applies Business Rule 4 for a new skill: any entry already at the name in the
+// target root, a symlink included, is refused, so re-proposing installed contents never opens another
+// review. The name is validated by PrepareSkillDraft and cannot leave the root.
+func refuseInstalledName(targetRoot, name string) error {
+	if _, err := os.Lstat(filepath.Join(targetRoot, name)); err == nil {
+		return fmt.Errorf("%w: a skill named %s is already installed for this instance", ErrSkillProposeNameTaken, name)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // skillReviewReport is the proposal report linking the operator's report feed to the review.

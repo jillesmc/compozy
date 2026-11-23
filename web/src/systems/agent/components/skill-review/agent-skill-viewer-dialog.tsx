@@ -30,7 +30,7 @@ const NO_EVIDENCE_SESSIONS: readonly string[] = [];
 function ReadToggle({ mode, onMode }: { mode: ReadMode; onMode: (mode: ReadMode) => void }) {
   return (
     <div className="ml-auto flex items-center gap-1">
-      {(["read", "source"] as const).map(value => (
+      {(["read", "source"] as const).map((value) => (
         <Button
           aria-pressed={mode === value}
           key={value}
@@ -108,6 +108,7 @@ export function AgentSkillViewerDialog({
   files,
   lesson,
   evidenceSessionIds = NO_EVIDENCE_SESSIONS,
+  unavailableEvidenceSessionIds,
   open,
   onOpenChange,
   stale = false,
@@ -115,6 +116,7 @@ export function AgentSkillViewerDialog({
   deciding = false,
   approveDisabled = false,
   error,
+  installConflictOp = null,
   onApprove,
   onReject,
   initialPath,
@@ -127,6 +129,8 @@ export function AgentSkillViewerDialog({
   /** The lesson the agent proposed with; absent on reviews created before lessons. */
   lesson?: AgentSkillLessonPayload | null;
   evidenceSessionIds?: readonly string[];
+  /** Evidence sessions the daemon no longer knows. */
+  unavailableEvidenceSessionIds?: readonly string[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The contents changed after the operator first read them; this is the latest. */
@@ -137,11 +141,13 @@ export function AgentSkillViewerDialog({
   /** This version can't be approved; Reject stays available. */
   approveDisabled?: boolean;
   error?: string;
+  /** Approve was refused because the skill changed while it was being replaced: the op to resolve. */
+  installConflictOp?: string | null;
   onApprove: () => void;
   onReject: () => void;
 }) {
   const [selected, setSelected] = useState(initialPath ?? SKILL_DEFINITION_FILE);
-  const file = files.find(item => item.path === selected) ?? files[0];
+  const file = files.find((item) => item.path === selected) ?? files[0];
   const count = files.length;
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -164,11 +170,26 @@ export function AgentSkillViewerDialog({
             <AgentSkillFileTree files={files} onSelect={setSelected} selected={file?.path ?? ""} />
           </nav>
           <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto px-6 pt-4 pb-6">
-            <AgentSkillLesson evidenceSessionIds={evidenceSessionIds} lesson={lesson} />
+            <AgentSkillLesson
+              evidenceSessionIds={evidenceSessionIds}
+              lesson={lesson}
+              unavailableSessionIds={unavailableEvidenceSessionIds}
+            />
             {stale ? (
               <Alert data-testid="skill-review-stale" variant="warning">
                 <AlertDescription>
                   This is the latest version. It changed after you first opened it.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {installConflictOp !== null ? (
+              <Alert data-testid="skill-review-install-conflict" variant="warning">
+                <AlertDescription>
+                  This skill changed while it was being replaced. Resolve it with{" "}
+                  <code className="font-mono">
+                    compozy agent skill install-conflict resolve {installConflictOp || "<op>"}
+                  </code>
+                  .
                 </AlertDescription>
               </Alert>
             ) : null}
