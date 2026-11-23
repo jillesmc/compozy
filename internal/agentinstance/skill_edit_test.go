@@ -2,6 +2,7 @@ package agentinstance
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -50,6 +51,61 @@ func (f *skillTxFixture) mustProposeEdit(t *testing.T, svc *SkillProposalService
 		t.Fatalf("Propose(edit) = %v", err)
 	}
 	return result.Review
+}
+
+// linkSkillOutside moves the installed skill name to a directory outside the target root and leaves
+// a symlink to it at the skill path. It returns the outside directory.
+func (f *skillTxFixture) linkSkillOutside(t *testing.T, name string) string {
+	t.Helper()
+	outside := filepath.Join(t.TempDir(), name)
+	if err := os.Rename(filepath.Join(f.root, name), outside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(f.root, name)); err != nil {
+		t.Fatal(err)
+	}
+	return outside
+}
+
+// requireLinkedOutside checks that the skill path is still the symlink and its target is untouched.
+func (f *skillTxFixture) requireLinkedOutside(t *testing.T, name, outside string) {
+	t.Helper()
+	if target, err := os.Readlink(filepath.Join(f.root, name)); err != nil || target != outside {
+		t.Fatalf("skill link = %q, %v; want %q", target, err, outside)
+	}
+	data, mode := readSkillFileMode(t, filepath.Join(outside, "scripts", "check.sh"))
+	if string(data) != skillEditBase[1].content || mode != skillEditBase[1].mode {
+		t.Fatalf("outside directory changed: %q %o", data, mode)
+	}
+}
+
+// failingCreateStore fails CreateReview, optionally after committing the row, and optionally fails the
+// read that settles whether the row exists.
+type failingCreateStore struct {
+	*memSkillReviewStore
+	err     error
+	commit  bool
+	readErr error
+}
+
+func (s *failingCreateStore) CreateReview(
+	ctx context.Context,
+	review SkillReview,
+	report ReportInput,
+) (SkillReview, bool, error) {
+	if s.commit {
+		if _, _, err := s.memSkillReviewStore.CreateReview(ctx, review, report); err != nil {
+			return SkillReview{}, false, err
+		}
+	}
+	return SkillReview{}, false, s.err
+}
+
+func (s *failingCreateStore) GetReview(ctx context.Context, id string) (SkillReview, error) {
+	if s.readErr != nil {
+		return SkillReview{}, s.readErr
+	}
+	return s.memSkillReviewStore.GetReview(ctx, id)
 }
 
 func requireNoReviews(t *testing.T, svc *SkillProposalService) {
@@ -152,6 +208,18 @@ func TestSkillEditProposals(t *testing.T) {
 		}
 		requireNoReviews(t, svc)
 
+		// The whole skill directory is a symlink to a directory outside the target root.
+		linked := newSkillTxFixture(t)
+		linked.install(t, skillEditName, skillEditBase...)
+		outside := linked.linkSkillOutside(t, skillEditName)
+		linkedSvc := linked.service(t, "home-a", nil)
+		if _, err := linked.proposeEdit(t, linkedSvc, "Changed.\n", nil); !errors.Is(err,
+			ErrSkillReviewBaseUnsupported) {
+			t.Fatalf("symlinked skill directory: Propose() = %v, want skill_review_base_unsupported", err)
+		}
+		requireNoReviews(t, linkedSvc)
+		linked.requireLinkedOutside(t, skillEditName, outside)
+
 		many := newSkillTxFixture(t)
 		files := append([]skillTestFile{}, skillEditBase...)
 		for i := range maxSkillBaseFiles {
@@ -164,6 +232,67 @@ func TestSkillEditProposals(t *testing.T) {
 		manySvc := many.service(t, "home-a", nil)
 		if _, err := many.proposeEdit(t, manySvc, "Changed.\n", nil); !errors.Is(err, ErrSkillReviewBaseUnsupported) {
 			t.Fatalf("too many files: Propose() = %v", err)
+		}
+	})
+
+	t.Run("Should refuse agent-reachable overlay inputs with skill_review_invalid [UT-015]", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name   string
+			mutate func(*SkillProposalInput)
+		}{
+			{"case-only collision", func(input *SkillProposalInput) {
+				input.Files = []SkillDraftFile{{Path: "Scripts/check.sh", Content: "echo other\n"}}
+			}},
+			{"file over a base directory", func(input *SkillProposalInput) {
+				input.Files = []SkillDraftFile{{Path: "scripts", Content: "not a directory\n"}}
+			}},
+			{"unknown mode", func(input *SkillProposalInput) { input.Mode = "replace" }},
+		} {
+			f := newSkillTxFixture(t)
+			f.install(t, skillEditName, skillEditBase...)
+			svc := f.service(t, "home-a", nil)
+			if _, err := f.proposeEdit(t, svc, "Changed.\n", tc.mutate); !errors.Is(err, ErrSkillReviewInvalid) {
+				t.Fatalf("%s: Propose() = %v, want skill_review_invalid", tc.name, err)
+			}
+			requireNoReviews(t, svc)
+		}
+	})
+
+	t.Run("Should drop the draft and snapshot only when the failed review row is absent", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name      string
+			committed bool
+			readErr   error
+			kept      bool
+		}{
+			{name: "no row created", kept: false},
+			{name: "row committed despite the error", committed: true, kept: true},
+			{name: "row unreadable", readErr: errors.New("database closed"), kept: true},
+		} {
+			f := newSkillTxFixture(t)
+			f.install(t, skillEditName, skillEditBase...)
+			svc := f.service(t, "home-a", nil)
+			createErr := errors.New("database is locked")
+			svc.Store = &failingCreateStore{
+				memSkillReviewStore: skillStore(svc), err: createErr, commit: tc.committed, readErr: tc.readErr,
+			}
+			if _, err := f.proposeEdit(t, svc, "Changed.\n", nil); !errors.Is(err, createErr) {
+				t.Fatalf("%s: Propose() = %v, want the store error", tc.name, err)
+			}
+			entries, err := os.ReadDir(svc.DraftRoot)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			// A kept proposal leaves its draft and its base snapshot.
+			want := 0
+			if tc.kept {
+				want = 2
+			}
+			if len(entries) != want {
+				t.Fatalf("%s: draft root holds %d entries, kept = %v", tc.name, len(entries), tc.kept)
+			}
 		}
 	})
 

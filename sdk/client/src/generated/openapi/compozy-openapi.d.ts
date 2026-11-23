@@ -9212,6 +9212,7 @@ export interface components {
       action: string;
       keep?: string;
       op_id: string;
+      retained_copy?: string;
       review_id?: string;
       /** Format: date-time */
       since?: string | null;
@@ -9226,6 +9227,7 @@ export interface components {
       keep: string;
       kept_copy?: string;
       op_id: string;
+      retained_copy?: string;
       skill: string;
     };
     AgentSkillInstallConflictsResponse: {
@@ -9236,6 +9238,11 @@ export interface components {
       cue: string;
       evidence: string;
       lesson: string;
+    };
+    AgentSkillRevertConflictPayload: {
+      code: string;
+      error: string;
+      reason: string;
     };
     AgentSkillRevertEligibility: {
       allowed: boolean;
@@ -10850,7 +10857,6 @@ export interface components {
       diagnostic?: components["schemas"]["DiagnosticItem"] | null;
       error: string;
       provider_error?: string;
-      reason?: string;
       retryable?: boolean;
       unknown_keys?: string[];
     };
@@ -16438,7 +16444,6 @@ export interface components {
       diagnostic?: components["schemas"]["DiagnosticItem"] | null;
       error: string;
       provider_error?: string;
-      reason?: string;
       retryable?: boolean;
       unknown_keys?: string[];
     };
@@ -17111,7 +17116,6 @@ export interface components {
       error: string;
       message: string;
       provider_error?: string;
-      reason?: string;
       retryable?: boolean;
       unknown_keys?: string[];
     };
@@ -20229,7 +20233,6 @@ export interface components {
       error: string;
       field: string;
       provider_error?: string;
-      reason?: string;
       retryable?: boolean;
       unknown_keys?: string[];
     };

@@ -762,6 +762,7 @@ export type AgentSkillInstallConflictPayload = {
   action: string;
   keep?: string;
   op_id: string;
+  retained_copy?: string;
   review_id?: string;
   since?: string | null;
   skill: string;
@@ -777,6 +778,7 @@ export type AgentSkillInstallConflictResolveResponse = {
   keep: string;
   kept_copy?: string;
   op_id: string;
+  retained_copy?: string;
   skill: string;
 };
 
@@ -2418,7 +2420,6 @@ export type ErrorPayload = {
   diagnostic?: DiagnosticItem | null;
   error: string;
   provider_error?: string;
-  reason?: string;
   retryable?: boolean;
   unknown_keys?: Array<string>;
 };
@@ -7839,7 +7840,6 @@ export type SessionDeriveErrorPayload = {
   diagnostic?: DiagnosticItem | null;
   error: string;
   provider_error?: string;
-  reason?: string;
   retryable?: boolean;
   unknown_keys?: Array<string>;
 };
@@ -8508,7 +8508,6 @@ export type SessionPullRequestErrorPayload = {
   error: string;
   message: string;
   provider_error?: string;
-  reason?: string;
   retryable?: boolean;
   unknown_keys?: Array<string>;
 };
@@ -11587,7 +11586,6 @@ export type TaskQueryErrorPayload = {
   error: string;
   field: string;
   provider_error?: string;
-  reason?: string;
   retryable?: boolean;
   unknown_keys?: Array<string>;
 };

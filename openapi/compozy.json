@@ -2701,6 +2701,9 @@
           "op_id": {
             "type": "string"
           },
+          "retained_copy": {
+            "type": "string"
+          },
           "review_id": {
             "type": "string"
           },
@@ -2749,6 +2752,9 @@
           "op_id": {
             "type": "string"
           },
+          "retained_copy": {
+            "type": "string"
+          },
           "skill": {
             "type": "string"
           }
@@ -2793,6 +2799,25 @@
           "cue",
           "evidence",
           "lesson"
+        ],
+        "type": "object"
+      },
+      "AgentSkillRevertConflictPayload": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "error",
+          "reason"
         ],
         "type": "object"
       },
@@ -8900,9 +8925,6 @@
             "type": "string"
           },
           "provider_error": {
-            "type": "string"
-          },
-          "reason": {
             "type": "string"
           },
           "retryable": {
@@ -28149,9 +28171,6 @@
           "provider_error": {
             "type": "string"
           },
-          "reason": {
-            "type": "string"
-          },
           "retryable": {
             "type": "boolean"
           },
@@ -30835,9 +30854,6 @@
             "type": "string"
           },
           "provider_error": {
-            "type": "string"
-          },
-          "reason": {
             "type": "string"
           },
           "retryable": {
@@ -41376,9 +41392,6 @@
             "type": "string"
           },
           "provider_error": {
-            "type": "string"
-          },
-          "reason": {
             "type": "string"
           },
           "retryable": {

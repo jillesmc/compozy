@@ -47,7 +47,9 @@ func (t SkillTree) Digest() string {
 	manifest.Write([]byte(skillTreeDigestHeader))
 	for _, file := range t {
 		sum := sha256.Sum256(file.Data)
-		manifest.Write([]byte(skillManifestLine(file.Path, file.Perm, int64(len(file.Data)), hex.EncodeToString(sum[:]))))
+		manifest.Write(
+			[]byte(skillManifestLine(file.Path, file.Perm, int64(len(file.Data)), hex.EncodeToString(sum[:]))),
+		)
 	}
 	return "sha256:" + hex.EncodeToString(manifest.Sum(nil))
 }
@@ -183,7 +185,8 @@ func applySkillOverlay(base SkillTree, draft SkillDraft) (SkillTree, error) {
 	}
 	for _, file := range draft.Files {
 		if existing, ok := folded[strings.ToLower(file.Path)]; ok && existing != file.Path {
-			return nil, fmt.Errorf("skill proposal file %s differs only in case from installed %s", file.Path, existing)
+			return nil, fmt.Errorf("%w: skill proposal file %s differs only in case from installed %s",
+				ErrSkillReviewInvalid, file.Path, existing)
 		}
 		perm := skillNewFilePerm
 		if previous, ok := byPath[file.Path]; ok {
@@ -200,7 +203,8 @@ func applySkillOverlay(base SkillTree, draft SkillDraft) (SkillTree, error) {
 		parent := filepath.ToSlash(filepath.Dir(file.Path))
 		for ; parent != "."; parent = filepath.ToSlash(filepath.Dir(parent)) {
 			if _, ok := byPath[parent]; ok {
-				return nil, errors.New("skill proposal file conflicts with a directory")
+				return nil, fmt.Errorf("%w: skill proposal file %s conflicts with the file %s", ErrSkillReviewInvalid,
+					file.Path, parent)
 			}
 		}
 	}
