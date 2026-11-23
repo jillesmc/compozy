@@ -105,7 +105,8 @@ func nativeSkillReviewError(id toolspkg.ToolID, err error) error {
 		agentinstance.ErrSkillReviewNoTarget, agentinstance.ErrSkillReviewStale, agentinstance.ErrSkillReviewNotFound,
 		agentinstance.ErrSkillProposeLessonRequired, agentinstance.ErrSkillProposeLessonTooLong,
 		agentinstance.ErrSkillProposeEvidenceRequired, agentinstance.ErrSkillProposeEvidenceNotFound,
-		agentinstance.ErrSkillProposePreviouslyRejected} {
+		agentinstance.ErrSkillProposePreviouslyRejected, agentinstance.ErrSkillInstallBusy,
+		agentinstance.ErrSkillInstallConflict} {
 		if errors.Is(err, domain) {
 			return toolspkg.NewToolError(toolspkg.ErrorCode(domain.Error()), id, err.Error(), err)
 		}
