@@ -103,7 +103,11 @@ func (r *InstanceRepo) RecoverConfigRejectedWake(ctx context.Context, id string,
 
 // SetSkillAutoApprove turns the operator-only skill auto-approve toggle of a live instance on or off.
 // Setting the current value is a no-op; an archived or missing instance is agentinstance.ErrNotFound.
-func (r *InstanceRepo) SetSkillAutoApprove(ctx context.Context, id string, enabled bool) (agentinstance.Instance, error) {
+func (r *InstanceRepo) SetSkillAutoApprove(
+	ctx context.Context,
+	id string,
+	enabled bool,
+) (agentinstance.Instance, error) {
 	if err := r.checkReady(ctx, "set instance skill auto-approve"); err != nil {
 		return agentinstance.Instance{}, err
 	}
