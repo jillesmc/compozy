@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -122,5 +123,5 @@ func jsonEqual(a, b any) bool {
 		return false
 	}
 	right, err := json.Marshal(b)
-	return err == nil && string(left) == string(right)
+	return err == nil && bytes.Equal(left, right)
 }

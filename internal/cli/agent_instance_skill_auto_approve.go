@@ -65,7 +65,7 @@ func skillAutoApproveState(on bool) string {
 	if on {
 		return "on"
 	}
-	return "off"
+	return agentInstanceChecksOff
 }
 
 type agentInstanceSkillAutoApproveClient interface {
