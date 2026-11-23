@@ -2,6 +2,7 @@ package agentinstance
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/compozy/compozy/internal/dirpublish"
+	"github.com/compozy/compozy/internal/fileutil"
 	"github.com/compozy/compozy/internal/workspaceaccess"
 )
 
@@ -64,6 +67,45 @@ func (f *skillTxFixture) seedConflict(t *testing.T, svc *SkillProposalService, s
 		t.Fatalf("seeded journal = %+v, %v; want a conflict with the original in %s", payload, ok, source)
 	}
 	return seededSkillConflict{opID: payload.OpID, base: base, edited: f.digest(t, "release-checklist")}
+}
+
+// rewriteJournal edits the payload of a skill's journal in place, for states the filesystem alone
+// cannot reach.
+func (f *skillTxFixture) rewriteJournal(t *testing.T, name string, edit func(*SkillInstallPayload)) {
+	t.Helper()
+	parent, err := fileutil.OpenDirectoryForMutation(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := parent.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	journal, exists, err := dirpublish.ReadJournal(parent, name)
+	if err != nil || !exists {
+		t.Fatalf("ReadJournal(%s) = %v, %v", name, exists, err)
+	}
+	payload, err := decodeSkillInstallPayload(journal.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit(&payload)
+	if journal.Payload, err = json.Marshal(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := dirpublish.WriteJournal(parent, journal, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeTree replaces SKILL.md under the root-relative dir with content and returns the tree digest.
+func (f *skillTxFixture) writeTree(t *testing.T, dir, content string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.root, dir, "SKILL.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f.digest(t, dir)
 }
 
 func (f *skillTxFixture) resolve(
@@ -166,8 +208,9 @@ func TestSkillInstallConflictResolution(t *testing.T) {
 		svc := f.service(t, "home-a", nil)
 		publisher := &countingPublisher{}
 		svc.Publisher = publisher
-		seeded := f.seedConflict(t, svc, skillOriginalInBackup)
+		// Proposed before the skill exists: a new proposal of an installed name is refused.
 		review := f.propose(t, svc, "release-checklist", "Another change.")
+		seeded := f.seedConflict(t, svc, skillOriginalInBackup)
 		if _, err := f.approve(t, svc, review); !errors.Is(err, ErrSkillInstallConflict) ||
 			!strings.Contains(err.Error(), "install-conflict resolve "+seeded.opID) {
 			t.Fatalf("Approve() during a conflict = %v, want skill_install_conflict naming the op", err)
@@ -305,5 +348,205 @@ func TestSkillInstallConflictResolution(t *testing.T) {
 		if err != nil || !result.AlreadyResolved || f.digest(t, "release-checklist") != seeded.edited {
 			t.Fatalf("same keep=current = %+v, %v; want a no-op success", result, err)
 		}
+	})
+	t.Run("Should retain a second external edit in the backup slot through either resolution [UT-064]",
+		func(t *testing.T) {
+			t.Parallel()
+			for _, keep := range []string{SkillConflictKeepCurrent, SkillConflictKeepPrevious} {
+				t.Run("Should keep both edited trees with keep="+keep, func(t *testing.T) {
+					t.Parallel()
+					f := newSkillTxFixture(t)
+					svc := f.service(t, "home-a", nil)
+					base := f.install(t, "release-checklist", skillBaseFiles...)
+					if err := f.runOp(t, crashAt(svc, "target_moved"), "release-checklist",
+						f.replaceOp(t, "release-checklist")); !errors.Is(err, errSkillInstallCrashed) {
+						t.Fatalf("runSkillOp() = %v", err)
+					}
+					backupSlot := ""
+					for _, name := range f.leftovers(t) {
+						if strings.HasPrefix(name, ".compozy-backup-") {
+							backupSlot = name
+						}
+					}
+					atTarget := f.writeTree(t, "release-checklist", "edited at the target")
+					inBackup := f.writeTree(t, backupSlot, "edited in the backup slot")
+					f.reconcile(t, svc)
+					payload, ok := f.journal(t, "release-checklist")
+					retained := skillConflictCopyPrefix + payload.OpID + "-backup"
+					if !ok || payload.State != skillInstallStateConflict || payload.RetainedBackupName != retained ||
+						payload.OriginalSource != skillOriginalInCopy {
+						t.Fatalf("journal = %+v, %v; want a conflict retaining %s", payload, ok, retained)
+					}
+					retainedPath := filepath.Join(f.root, retained)
+					conflicts, err := svc.InstallConflicts(t.Context(), skillOperator, []string{f.root})
+					if err != nil || len(conflicts) != 1 || conflicts[0].RetainedCopy != retainedPath {
+						t.Fatalf("InstallConflicts() = %+v, %v; want retained copy %s", conflicts, err, retainedPath)
+					}
+					result, err := f.resolve(t, svc, payload.OpID, keep)
+					if err != nil || result.RetainedCopy != retainedPath {
+						t.Fatalf("ResolveInstallConflict() = %+v, %v; want retained copy %s", result, err, retainedPath)
+					}
+					if f.digest(t, retained) != inBackup {
+						t.Fatal("the resolution removed the edit retained from the backup slot")
+					}
+					wantTarget, keptCopy := atTarget, ""
+					if keep == SkillConflictKeepPrevious {
+						wantTarget, keptCopy = base, skillConflictCopyPrefix+payload.OpID
+					}
+					if f.digest(t, "release-checklist") != wantTarget ||
+						(keptCopy != "" && f.digest(t, keptCopy) != atTarget) {
+						t.Fatal("the resolution lost the edit at the target or did not restore the original")
+					}
+					f.requireClean(t)
+				})
+			}
+		})
+	t.Run("Should refuse keep=previous when the original is gone [UT-065]", func(t *testing.T) {
+		t.Parallel()
+		type loseOriginal func(t *testing.T, f *skillTxFixture, payload SkillInstallPayload)
+		cases := map[string]loseOriginal{
+			"Should refuse a lost original copy": func(t *testing.T, f *skillTxFixture, p SkillInstallPayload) {
+				if err := os.RemoveAll(filepath.Join(f.root, p.OriginalCopyName)); err != nil {
+					t.Fatal(err)
+				}
+			},
+			"Should refuse an absent original": func(t *testing.T, f *skillTxFixture, _ SkillInstallPayload) {
+				f.rewriteJournal(t, "release-checklist", func(payload *SkillInstallPayload) {
+					payload.OriginalSource = skillOriginalAbsent
+				})
+			},
+		}
+		for name, lose := range cases {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				f := newSkillTxFixture(t)
+				svc := f.service(t, "home-a", nil)
+				seeded := f.seedConflict(t, svc, skillOriginalInCopy)
+				payload, _ := f.journal(t, "release-checklist")
+				lose(t, f, payload)
+				if _, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepPrevious); !errors.Is(
+					err, ErrSkillInstallConflict) || !strings.Contains(err.Error(), "--keep current") {
+					t.Fatalf("keep=previous without an original = %v, want skill_install_conflict", err)
+				}
+				if after, ok := f.journal(t, "release-checklist"); !ok || after.State != skillInstallStateConflict {
+					t.Fatalf("journal = %+v, %v; want it still in conflict", after, ok)
+				}
+				if f.digest(t, "release-checklist") != seeded.edited ||
+					f.digest(t, skillConflictCopyPrefix+seeded.opID) != "" {
+					t.Fatal("a refused keep=previous moved files")
+				}
+				if _, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepCurrent); err != nil {
+					t.Fatalf("keep=current after the refusal = %v", err)
+				}
+			})
+		}
+	})
+	t.Run("Should answer a repeated keep=current from the recorded keep [UT-076]", func(t *testing.T) {
+		t.Parallel()
+		f := newSkillTxFixture(t)
+		svc := f.service(t, "home-a", nil)
+		seeded := f.seedConflict(t, svc, skillOriginalInBackup)
+		if err := os.RemoveAll(filepath.Join(f.root, "release-checklist")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepCurrent); err != nil {
+			t.Fatalf("keep=current with an absent edited tree = %v", err)
+		}
+		if entry := f.lastInstallEntry(t); entry.Keep != SkillConflictKeepCurrent || entry.Current != nil {
+			t.Fatalf("last log entry = %+v; want keep=current removing the skill", entry)
+		}
+		if repeat, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepCurrent); err != nil ||
+			!repeat.AlreadyResolved {
+			t.Fatalf("repeated keep=current = %+v, %v; want already_resolved", repeat, err)
+		}
+		if _, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepPrevious); !errors.Is(
+			err, ErrSkillInstallConflictResolving) {
+			t.Fatalf("repeat with the other keep = %v, want skill_install_conflict_resolving", err)
+		}
+	})
+	t.Run("Should list and resolve around an unreadable journal of another skill [UT-066]", func(t *testing.T) {
+		t.Parallel()
+		f := newSkillTxFixture(t)
+		svc := f.service(t, "home-a", nil)
+		seeded := f.seedConflict(t, svc, skillOriginalInBackup)
+		broken := filepath.Join(f.root, dirpublish.JournalName("broken-skill"))
+		if err := os.WriteFile(broken, []byte(`{"target_name":"broken-skill"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		conflicts, err := svc.InstallConflicts(t.Context(), skillOperator, []string{f.root})
+		if err != nil || len(conflicts) != 1 || conflicts[0].OpID != seeded.opID {
+			t.Fatalf("InstallConflicts() = %+v, %v; want the readable conflict only", conflicts, err)
+		}
+		if _, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepCurrent); err != nil {
+			t.Fatalf("ResolveInstallConflict() = %v", err)
+		}
+	})
+	t.Run("Should return busy to resolve while another process holds the lock [UT-083]", func(t *testing.T) {
+		t.Parallel()
+		f := newSkillTxFixture(t)
+		svc := f.service(t, "home-a", nil)
+		seeded := f.seedConflict(t, svc, skillOriginalInBackup)
+		parent, err := fileutil.OpenDirectoryForMutation(f.root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lock, err := dirpublish.AcquireLock(parent, "release-checklist")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepCurrent); !errors.Is(err, ErrSkillInstallBusy) {
+			t.Fatalf("ResolveInstallConflict() = %v, want skill_install_busy", err)
+		}
+		if payload, ok := f.journal(t, "release-checklist"); !ok || payload.State != skillInstallStateConflict {
+			t.Fatalf("journal = %+v, %v; want it untouched", payload, ok)
+		}
+		if err := errors.Join(lock.Close(), parent.Close()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepCurrent); err != nil {
+			t.Fatalf("ResolveInstallConflict() after release = %v", err)
+		}
+	})
+	t.Run("Should resolve an edited copy replaced by a symlink without following it [UT-065]", func(t *testing.T) {
+		t.Parallel()
+		f := newSkillTxFixture(t)
+		svc := f.service(t, "home-a", nil)
+		seeded := f.seedConflict(t, svc, skillOriginalInBackup)
+		outside := t.TempDir()
+		if err := os.WriteFile(filepath.Join(outside, "SKILL.md"), []byte("outside"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(f.root, "release-checklist")
+		if err := os.RemoveAll(target); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, target); err != nil {
+			t.Fatal(err)
+		}
+		_, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepCurrent)
+		if !errors.Is(err, ErrSkillInstallConflict) || !strings.Contains(err.Error(), "--keep previous") {
+			t.Fatalf("keep=current over a symlink = %v, want skill_install_conflict naming --keep previous", err)
+		}
+		if payload, ok := f.journal(t, "release-checklist"); !ok || payload.State != skillInstallStateConflict {
+			t.Fatalf("journal = %+v, %v; want it still in conflict", payload, ok)
+		}
+		if info, err := os.Lstat(target); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("refused keep=current changed the target: %v, %v", info, err)
+		}
+		result, err := f.resolve(t, svc, seeded.opID, SkillConflictKeepPrevious)
+		if err != nil || result.KeptCopy != filepath.Join(f.root, skillConflictCopyPrefix+seeded.opID) {
+			t.Fatalf("keep=previous over a symlink = %+v, %v", result, err)
+		}
+		if f.digest(t, "release-checklist") != seeded.base {
+			t.Fatal("keep=previous did not restore the original")
+		}
+		if link, err := os.Readlink(result.KeptCopy); err != nil || link != outside {
+			t.Fatalf("keep-copy = %q, %v; want the symlink itself moved aside", link, err)
+		}
+		content, err := os.ReadFile(filepath.Join(outside, "SKILL.md"))
+		if err != nil || string(content) != "outside" {
+			t.Fatalf("the symlink's referent changed: %q, %v", content, err)
+		}
+		f.requireClean(t)
 	})
 }

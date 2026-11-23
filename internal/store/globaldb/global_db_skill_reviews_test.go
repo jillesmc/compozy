@@ -1,6 +1,9 @@
 package globaldb
 
 import (
+	"bytes"
+	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -9,6 +12,7 @@ import (
 
 	"github.com/compozy/compozy/internal/agentinstance"
 	"github.com/compozy/compozy/internal/store"
+	"github.com/compozy/compozy/internal/store/telemetrydb"
 )
 
 // Invariant: skill review rows survive the lesson migration losslessly, and proposal identity
@@ -29,6 +33,11 @@ func TestSkillReviewRepo(t *testing.T) {
  ('skr-pending','inst','prof','ws','coder','pending-skill','sha256:p','pending','/drafts/p','sess-p','','2026-11-01T00:00:00Z',NULL),
  ('skr-approved','inst','prof','ws','coder','approved-skill','sha256:a','approved','/drafts/a',NULL,'operator:prof','2026-11-01T00:01:00Z','2026-11-02T00:00:00Z'),
  ('skr-rejected','inst','prof','','coder','rejected-skill','sha256:r','rejected','/drafts/r','sess-r','operator:prof','2026-11-01T00:02:00Z','2026-11-02T00:01:00Z')`)
+		if seedErr == nil {
+			// The prefix already records telemetry relocation; seed its required destination exactly as the
+			// other post-relocation migration fixtures do.
+			seedErr = bindSkillReviewMigrationTelemetry(ctx, prefix, path)
+		}
 		if err := errors.Join(seedErr, prefix.Close()); err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +46,8 @@ func TestSkillReviewRepo(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			if err := upgraded.Close(ctx); err != nil {
+			// t.Context is already canceled when cleanups run.
+			if err := upgraded.Close(context.WithoutCancel(ctx)); err != nil {
 				t.Error(err)
 			}
 		})
@@ -220,7 +230,7 @@ func TestSkillReviewRepo(t *testing.T) {
 		}
 		approved, err := repo.GetReview(ctx, "skr-projected")
 		if err != nil || approved.State != "approved" || approved.InstalledDigest != "sha256:tree" ||
-			string(approved.PrevInstallMarker) != string(previous) || approved.DecidedBy != "operator:prof" ||
+			!bytes.Equal(approved.PrevInstallMarker, previous) || approved.DecidedBy != "operator:prof" ||
 			approved.DecidedAt == nil || !approved.DecidedAt.Equal(committedAt) {
 			t.Fatalf("projected review = %+v, %v", approved, err)
 		}
@@ -238,4 +248,12 @@ func TestSkillReviewRepo(t *testing.T) {
 			t.Fatalf("reject after approval = %v, want stale", err)
 		}
 	})
+}
+
+func bindSkillReviewMigrationTelemetry(ctx context.Context, db *sql.DB, path string) error {
+	telemetry, err := telemetrydb.Open(ctx, telemetrydb.Path(path))
+	if err != nil {
+		return err
+	}
+	return errors.Join(bindTelemetryDestination(ctx, db, telemetry.DB()), telemetry.Close(ctx))
 }

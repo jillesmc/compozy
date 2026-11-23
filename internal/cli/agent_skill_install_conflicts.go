@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/compozy/compozy/internal/api/contract"
@@ -117,15 +118,30 @@ func agentSkillInstallConflictTable(conflicts []contract.AgentSkillInstallConfli
 		}
 		rows = append(rows, []string{conflict.OpID, conflict.Skill, conflict.Action, conflict.State, since})
 	}
-	return renderHumanTable("", []string{"OP", "SKILL", "ACTION", "STATE", "SINCE"}, rows) + "\n"
+	var text strings.Builder
+	text.WriteString(renderHumanTable("", []string{"OP", "SKILL", "ACTION", cliStateHeader, "SINCE"}, rows) + "\n")
+	for _, conflict := range conflicts {
+		if conflict.RetainedCopy != "" {
+			fmt.Fprintf(&text, "%s: %s\n", conflict.OpID, agentSkillRetainedCopyText(conflict.RetainedCopy))
+		}
+	}
+	return text.String()
+}
+
+func agentSkillRetainedCopyText(path string) string {
+	return fmt.Sprintf("another edited copy found during the conflict is kept in %s/.", path)
 }
 
 func agentSkillInstallConflictResolvedText(result contract.AgentSkillInstallConflictResolveResponse) string {
 	if result.AlreadyResolved {
 		return fmt.Sprintf("%s was already resolved with --keep %s.\n", result.OpID, result.Keep)
 	}
+	text := fmt.Sprintf("Kept the current %s and discarded the previous copy.\n", result.Skill)
 	if result.Keep == "previous" {
-		return fmt.Sprintf("Restored the previous %s. The edited copy is in %s/.\n", result.Skill, result.KeptCopy)
+		text = fmt.Sprintf("Restored the previous %s. The edited copy is in %s/.\n", result.Skill, result.KeptCopy)
 	}
-	return fmt.Sprintf("Kept the current %s and discarded the previous copy.\n", result.Skill)
+	if result.RetainedCopy != "" {
+		text += "Also, " + agentSkillRetainedCopyText(result.RetainedCopy) + "\n"
+	}
+	return text
 }

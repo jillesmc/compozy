@@ -430,7 +430,11 @@ func TestInstanceSkillApprovalIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			detailRaw, readErr := io.ReadAll(detailResponse.Body)
-			if err := errors.Join(readErr, detailResponse.Body.Close()); err != nil || detailResponse.StatusCode != 200 {
+			if err := errors.Join(
+				readErr,
+				detailResponse.Body.Close(),
+			); err != nil ||
+				detailResponse.StatusCode != 200 {
 				t.Fatalf("review detail via %s: %d %s %v", transport.base, detailResponse.StatusCode, detailRaw, err)
 			}
 			detailBodies = append(detailBodies, string(detailRaw))
@@ -494,7 +498,10 @@ func TestInstanceSkillApprovalIntegration(t *testing.T) {
 				ToolCallID: "read-with-bad-cursor",
 			},
 		)
-		if failure, ok := errors.AsType[*toolspkg.ToolError](badCursor); !ok || string(failure.Code) != "invalid_cursor" ||
+		if failure, ok := errors.AsType[*toolspkg.ToolError](
+			badCursor,
+		); !ok ||
+			string(failure.Code) != "invalid_cursor" ||
 			core.StatusForToolError(badCursor) != http.StatusUnprocessableEntity {
 			t.Fatalf("native reviews with a bad cursor: %v (status %d)", badCursor, core.StatusForToolError(badCursor))
 		}
@@ -563,7 +570,7 @@ func TestInstanceSkillApprovalIntegration(t *testing.T) {
 		failure, ok := errors.AsType[*toolspkg.ToolError](taken)
 		if !ok || string(failure.Code) != "skill_propose_name_taken" ||
 			core.StatusForToolError(taken) != http.StatusConflict ||
-			!strings.Contains(failure.PublicMessage, "a skill named review-proposed is already installed") {
+			failure.PublicMessage != "a skill named review-proposed is already installed for this instance" {
 			t.Fatalf("native reproposal of an installed skill: %v (status %d)", taken, core.StatusForToolError(taken))
 		}
 	})
@@ -1900,8 +1907,15 @@ func TestInstanceApprovalTransportBoundaryIntegration(t *testing.T) {
 		if !slices.Equal(mainSources, []string{"policy"}) {
 			t.Fatalf("main resolved_by=%v want=[policy]", mainSources)
 		}
-		child, err := manager.Spawn(t.Context(), &session.SpawnOpts{ParentSessionID: main.ID, AgentName: main.AgentName,
-			Workspace: workspace, Name: "Approval child", Permissions: "approve-reads", TTL: time.Minute, InheritPermissions: true})
+		child, err := manager.Spawn(t.Context(), &session.SpawnOpts{
+			ParentSessionID:    main.ID,
+			AgentName:          main.AgentName,
+			Workspace:          workspace,
+			Name:               "Approval child",
+			Permissions:        "approve-reads",
+			TTL:                time.Minute,
+			InheritPermissions: true,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

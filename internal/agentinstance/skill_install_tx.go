@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"time"
@@ -57,6 +58,9 @@ type SkillInstallPayload struct {
 	OriginalCopyName string `json:"original_copy_name,omitempty"`
 	Keep             string `json:"keep,omitempty"`           // resolving only: current | previous
 	KeepCopyName     string `json:"keep_copy_name,omitempty"` // resolving only: ".skill-conflict-<op-id>"
+	// RetainedBackupName is ".skill-conflict-<op-id>-backup": unexplained contents found in the backup
+	// slot while the target also held unexplained contents. No resolution removes it.
+	RetainedBackupName string `json:"retained_backup_name,omitempty"`
 	// ConflictAt is when the conflict was first retained; ResolvedBy the operator resolving it.
 	ConflictAt time.Time `json:"conflict_at,omitzero"`
 	ResolvedBy string    `json:"resolved_by,omitempty"`
@@ -361,6 +365,19 @@ func expectedSkillOriginal(payload SkillInstallPayload) string {
 		return ""
 	}
 	return payload.PreDigest
+}
+
+// moveEditedAside moves the skill entry at the target to name: a symlink entry is renamed itself,
+// never its referent; anything else moves as a directory.
+func moveEditedAside(t *skillTarget, name string) error {
+	info, err := os.Lstat(t.dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return t.parent.MoveSymlinkNoReplace(t.name, name)
+	}
+	return moveSkillChild(t.parent, t.name, name)
 }
 
 // moveSkillChild renames a direct child directory without replacing an existing name.

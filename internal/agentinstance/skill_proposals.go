@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/compozy/compozy/internal/fileutil"
 	"github.com/compozy/compozy/internal/store"
 	"github.com/compozy/compozy/internal/workspaceaccess"
 )
@@ -78,6 +77,11 @@ func (s *SkillProposalService) Propose(
 	if err != nil {
 		return SkillProposalResult{}, err
 	}
+	// Checked before the lock too, whose path resolution would reject a symlink leaving the root
+	// before the name is judged.
+	if err := refuseInstalledName(targetRoot, draft.Name); err != nil {
+		return SkillProposalResult{}, err
+	}
 	if err := s.checkEvidenceSessions(ctx, instance, evidence); err != nil {
 		return SkillProposalResult{}, err
 	}
@@ -86,7 +90,7 @@ func (s *SkillProposalService) Propose(
 		return SkillProposalResult{}, err
 	}
 	defer func() { err = errors.Join(err, t.close()) }()
-	// Checked after Reconcile so an interrupted install is settled before the name is judged.
+	// Checked again after Reconcile so an interrupted install is settled before the name is judged.
 	if err := refuseInstalledName(targetRoot, draft.Name); err != nil {
 		return SkillProposalResult{}, err
 	}
@@ -130,14 +134,11 @@ func (s *SkillProposalService) Propose(
 	return result, err
 }
 
-// refuseInstalledName applies Business Rule 4 for a new skill: a name already present in the target
-// root is refused, so re-proposing installed contents never opens another review.
+// refuseInstalledName applies Business Rule 4 for a new skill: any entry already at the name in the
+// target root, a symlink included, is refused, so re-proposing installed contents never opens another
+// review. The name is validated by PrepareSkillDraft and cannot leave the root.
 func refuseInstalledName(targetRoot, name string) error {
-	target, err := fileutil.ResolvePathWithinRoot(targetRoot, filepath.Join(targetRoot, name))
-	if err != nil {
-		return err
-	}
-	if _, err := os.Lstat(target); err == nil {
+	if _, err := os.Lstat(filepath.Join(targetRoot, name)); err == nil {
 		return fmt.Errorf("%w: a skill named %s is already installed for this instance", ErrSkillProposeNameTaken, name)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err

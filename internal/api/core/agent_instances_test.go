@@ -1916,10 +1916,12 @@ func TestAgentSkillReviews(t *testing.T) {
 				instance,
 				scanRoot,
 				agentinstance.SkillProposalInput{
-					Name:               name,
-					Description:        "Review changes",
-					Body:               "Read the diff.",
-					Files:              []agentinstance.SkillDraftFile{{Path: "scripts/read.sh", Content: "echo reviewed"}},
+					Name:        name,
+					Description: "Review changes",
+					Body:        "Read the diff.",
+					Files: []agentinstance.SkillDraftFile{
+						{Path: "scripts/read.sh", Content: "echo reviewed"},
+					},
 					Lesson:             lesson,
 					EvidenceSessionIDs: []string{"sess-4f1c0b2a9d3e4f51", "sess-9a2e7c1d0b4f3a62"},
 				},
@@ -2089,7 +2091,8 @@ func TestAgentSkillReviews(t *testing.T) {
 		if taken.Code != 409 || takenFailure.Code != "skill_review_target_exists" {
 			t.Fatalf("approval over an existing skill: %d %+v", taken.Code, takenFailure)
 		}
-		if kept, err := os.ReadFile(filepath.Join(existing, "SKILL.md")); err != nil || string(kept) != "operator skill" {
+		kept, err := os.ReadFile(filepath.Join(existing, "SKILL.md"))
+		if err != nil || string(kept) != "operator skill" {
 			t.Fatalf("existing skill changed: %q %v", kept, err)
 		}
 
@@ -2170,7 +2173,7 @@ func TestAgentSkillReviews(t *testing.T) {
 		for _, id := range []string{"skr-auto-1", "skr-auto-2", "skr-auto-3"} {
 			if _, err := db.DB().ExecContext(t.Context(), `INSERT INTO agent_skill_reviews
  (id,instance_id,profile_id,workspace_id,agent_name,skill_name,digest,state,draft_path,created_at,decided_at,decided_by,decided_via)
- VALUES (?,?,?,?,'coder',?,'sha256:auto','approved','/missing','2026-11-05T10:00:00Z','2026-11-05T10:00:00Z','auto-approve','auto_approve')`,
+ VALUES (?,?,?,?,'coder',?,'sha256:auto','approved','/missing','2026-11-05T10:00:00.000000000Z','2026-11-05T10:00:00.000000000Z','auto-approve','auto_approve')`,
 				id, instance.ID, instance.ProfileID, instance.WorkspaceID, id); err != nil {
 				t.Fatal(err)
 			}
