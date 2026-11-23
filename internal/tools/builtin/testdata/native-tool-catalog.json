@@ -327,6 +327,22 @@
     "full_output_schema_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0"
   },
   {
+    "tool_id": "compozy__agent_instance_skill_auto_approve",
+    "native_name": "agent_instance_skill_auto_approve",
+    "toolsets": [
+      "compozy__authored_context"
+    ],
+    "risk": "mutating",
+    "read_only": false,
+    "destructive": false,
+    "open_world": false,
+    "input_schema_digest": "55ba374599c126b9ad46d83992b550600caa5018462b1b30ec56dde2ebc71997",
+    "output_schema_digest": "99698ea069bf51ed4ac3928099d5ae9982e42304cef2788678fe98d6f5a304d9",
+    "result_contract": "compact_full",
+    "compact_output_schema_digest": "99698ea069bf51ed4ac3928099d5ae9982e42304cef2788678fe98d6f5a304d9",
+    "full_output_schema_digest": "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0"
+  },
+  {
     "tool_id": "compozy__agent_list",
     "native_name": "agent_list",
     "toolsets": [
