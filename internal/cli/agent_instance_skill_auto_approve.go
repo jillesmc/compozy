@@ -32,11 +32,16 @@ func newAgentInstanceSkillAutoApproveCommand(deps commandDeps) *cobra.Command {
 	return parent
 }
 
-func isSkillAutoApproveAction(action string) bool {
-	return action == agentInstanceSkillAutoApproveOn || action == agentInstanceSkillAutoApproveOff
+// agentInstanceUpdates are the PATCH verbs of one instance, each changing exactly one field.
+var agentInstanceUpdates = map[string]func(agentInstanceOptions, *cobra.Command, any, string, string) error{
+	agentInstanceBudgetAction: func(options agentInstanceOptions, cmd *cobra.Command, base any, id, _ string) error {
+		return options.updateBudget(cmd, base, id)
+	},
+	agentInstanceSkillAutoApproveOn:  setAgentInstanceSkillAutoApprove,
+	agentInstanceSkillAutoApproveOff: setAgentInstanceSkillAutoApprove,
 }
 
-func setAgentInstanceSkillAutoApprove(cmd *cobra.Command, base any, id, action string) error {
+func setAgentInstanceSkillAutoApprove(_ agentInstanceOptions, cmd *cobra.Command, base any, id, action string) error {
 	client, ok := base.(agentInstanceSkillAutoApproveClient)
 	if !ok {
 		return errors.New("cli: instance skill auto-approve unavailable")

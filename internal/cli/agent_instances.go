@@ -276,11 +276,8 @@ func (options agentInstanceOptions) run(cmd *cobra.Command, deps commandDeps, ac
 	if action == agentInstanceCheckAction || action == "on" || action == agentInstanceChecksOff {
 		return options.check(cmd, base, action, id, target)
 	}
-	if action == agentInstanceBudgetAction {
-		return options.updateBudget(cmd, base, id)
-	}
-	if isSkillAutoApproveAction(action) {
-		return setAgentInstanceSkillAutoApprove(cmd, base, id, action)
+	if update := agentInstanceUpdates[action]; update != nil {
+		return update(options, cmd, base, id, action)
 	}
 	if action == agentInstanceAwayAction || action == agentInstanceMarkSeenAction ||
 		action == agentInstanceCheckInsAction {

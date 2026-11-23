@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -288,7 +289,7 @@ func TestSkillReviewRepo(t *testing.T) {
 		}
 	})
 
-	t.Run("Should count only this instance's automatic approvals of one UTC day [IT-021]", func(t *testing.T) {
+	t.Run("Should count and filter this instance's automatic approvals of one UTC day [IT-021 UT-030 UT-031]", func(t *testing.T) {
 		t.Parallel()
 		db := openTestGlobalDB(t)
 		ctx := t.Context()
@@ -319,6 +320,26 @@ func TestSkillReviewRepo(t *testing.T) {
 			if err != nil || got != tc.want {
 				t.Fatalf("CountAutoApprovals(%s, %s) = %d, %v; want %d", tc.instance, tc.day, got, err, tc.want)
 			}
+		}
+		// UT-030, UT-031: the decided_via filter returns only automatic decisions, and an empty match is
+		// an empty page.
+		automatic, err := db.SkillReviews().ListReviews(ctx, agentinstance.SkillReviewQuery{
+			ProfileID: "prof", DecidedVia: "auto_approve", Limit: 100,
+		})
+		var ids []string
+		for _, review := range automatic {
+			ids = append(ids, review.ID)
+		}
+		slices.Sort(ids)
+		wantIDs := []string{"skr-auto", "skr-other", "skr-reverted", "skr-start", "skr-tomorrow", "skr-yesterday"}
+		if err != nil || !slices.Equal(ids, wantIDs) {
+			t.Fatalf("ListReviews(decided_via=auto_approve) = %v, %v; want %v [UT-030]", ids, err, wantIDs)
+		}
+		none, err := db.SkillReviews().ListReviews(ctx, agentinstance.SkillReviewQuery{
+			ProfileID: "prof", InstanceID: "inst-none", DecidedVia: "auto_approve", Limit: 100,
+		})
+		if err != nil || none == nil || len(none) != 0 {
+			t.Fatalf("ListReviews(no automatic decisions) = %#v, %v; want an empty slice [UT-031]", none, err)
 		}
 		rows, err := db.DB().QueryContext(ctx, `EXPLAIN QUERY PLAN SELECT count(*) FROM agent_skill_reviews
  WHERE instance_id = 'inst' AND state IN ('approved', 'reverted') AND decided_via = 'auto_approve'
