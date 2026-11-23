@@ -125,3 +125,18 @@ func jsonEqual(a, b any) bool {
 	right, err := json.Marshal(b)
 	return err == nil && bytes.Equal(left, right)
 }
+
+// Invariant: the human instance view (`agent instance show`, list rows, budget) states checks and
+// skill auto-approve, which `-o json` already carries.
+func TestAgentInstanceShowSkillAutoApprove(t *testing.T) {
+	t.Parallel()
+	t.Run("Should print skill auto-approve next to checks", func(t *testing.T) {
+		t.Parallel()
+		text := instanceText(contract.AgentInstancePayload{
+			ID: "ainst-test", AgentName: "triage", ChecksEnabled: true, SkillAutoApprove: true,
+		})
+		if !strings.Contains(text, "\nChecks: on\nSkill auto-approve: on\n") {
+			t.Fatalf("instanceText() = %q, want checks and skill auto-approve on", text)
+		}
+	})
+}
