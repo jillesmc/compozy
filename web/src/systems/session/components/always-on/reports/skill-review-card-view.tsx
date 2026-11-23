@@ -145,6 +145,124 @@ function ApprovedSkillReview({
   );
 }
 
+/** A reverted or rejected review: the receipt only. */
+function ClosedSkillReceipt({
+  kind,
+  name,
+  state,
+}: {
+  kind: string;
+  name: string;
+  state: "reverted" | "rejected";
+}) {
+  if (state === "rejected") {
+    return (
+      <Receipt icon={<X aria-hidden="true" />} tone="rejected">
+        You rejected <b>{name}</b>. It stays off unless its contents change.
+      </Receipt>
+    );
+  }
+  return (
+    <Receipt icon={<Undo2 aria-hidden="true" />} tone="rejected">
+      Reverted <b>{name}</b>
+      {kind === "edit" ? " to its previous contents" : ""}.
+    </Receipt>
+  );
+}
+
+/** A pending review: why, the cue, what runs on its own, and Review skill. */
+function PendingSkillNotice({
+  agent,
+  onReview,
+  view,
+  when,
+}: {
+  agent: ReportAgent;
+  onReview: () => void;
+  view: AgentSkillReviewView;
+  when: string;
+}) {
+  const review = view.review;
+  if (!review) return null;
+  return (
+    <Notice
+      actions={
+        <Button onClick={onReview} size="sm" type="button">
+          {view.stale ? "Review the latest" : "Review skill"}
+        </Button>
+      }
+      agent={agent}
+      body={
+        view.why ?? "I wrote down a procedure as a skill. Nothing in it runs until you approve it."
+      }
+      detail={
+        <div className="flex min-w-0 flex-col gap-3">
+          {view.stale ? (
+            <Alert variant="warning">
+              <AlertDescription>
+                This changed after you opened it. Read the latest version before deciding.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {review.lesson ? (
+            <p className="text-small-body text-muted-foreground" data-testid="skill-review-cue">
+              When: {review.lesson.cue}
+            </p>
+          ) : null}
+          <RunsAutomatically items={view.automatic} />
+        </div>
+      }
+      state="needs-you"
+      title={
+        review.kind === "edit"
+          ? `Change to review: ${review.name}`
+          : `New skill to review: ${review.name}`
+      }
+      when={when}
+    />
+  );
+}
+
+/** The viewer for a loaded review, deciding through the view. */
+function SkillReviewDialog({
+  agentLabel,
+  initialPath,
+  onOpenChange,
+  open,
+  view,
+}: {
+  agentLabel: string;
+  initialPath?: string;
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
+  view: AgentSkillReviewView;
+}) {
+  const { review } = view;
+  if (!review) return null;
+  return (
+    <AgentSkillViewerDialog
+      agentLabel={agentLabel}
+      decided={view.state !== "pending"}
+      deciding={view.deciding}
+      approveDisabled={view.invalid}
+      automaticComparison={view.automaticComparison}
+      error={view.decideError?.message}
+      installConflictOp={view.installConflictOp}
+      evidenceSessionIds={review.evidence_session_ids}
+      files={view.files}
+      lesson={review.lesson}
+      unavailableEvidenceSessionIds={view.unavailableEvidenceSessionIds}
+      initialPath={initialPath}
+      name={review.name}
+      onApprove={() => view.decide("approve")}
+      onOpenChange={onOpenChange}
+      onReject={() => view.decide("reject")}
+      open={open}
+      stale={view.stale}
+    />
+  );
+}
+
 /** The card for a loaded review; the container below reads and decides it. */
 export function SkillReviewCardView({
   agent,
@@ -162,28 +280,15 @@ export function SkillReviewCardView({
   const [open, setOpen] = useState(defaultOpen);
   const { review } = view;
   if (!review) return null;
-  const decide = (decision: "approve" | "reject") => view.decide(decision);
   const autoApproved = view.state === "approved" && review.decided_via === "auto_approve";
   const dialog = (
-    <AgentSkillViewerDialog
+    <SkillReviewDialog
       agentLabel={agent.label}
-      decided={view.state !== "pending"}
-      deciding={view.deciding}
-      approveDisabled={view.invalid}
-      automaticComparison={view.automaticComparison}
-      error={view.decideError?.message}
-      installConflictOp={view.installConflictOp}
-      evidenceSessionIds={review.evidence_session_ids}
-      files={view.files}
-      lesson={review.lesson}
       initialPath={initialPath}
       key={review.digest}
-      name={review.name}
-      onApprove={() => decide("approve")}
       onOpenChange={setOpen}
-      onReject={() => decide("reject")}
       open={open && (view.state === "pending" || autoApproved)}
-      stale={view.stale}
+      view={view}
     />
   );
   if (view.unreadable && view.state === "pending") {
@@ -200,66 +305,12 @@ export function SkillReviewCardView({
   if (view.state === "approved") {
     return <ApprovedSkillReview name={review.name} view={view} />;
   }
-  if (view.state === "reverted") {
-    return (
-      <Receipt icon={<Undo2 aria-hidden="true" />} tone="rejected">
-        {review.kind === "edit" ? (
-          <>
-            Reverted <b>{review.name}</b> to its previous contents.
-          </>
-        ) : (
-          <>
-            Reverted <b>{review.name}</b>.
-          </>
-        )}
-      </Receipt>
-    );
-  }
-  if (view.state === "rejected") {
-    return (
-      <Receipt icon={<X aria-hidden="true" />} tone="rejected">
-        You rejected <b>{review.name}</b>. It stays off unless its contents change.
-      </Receipt>
-    );
+  if (view.state === "reverted" || view.state === "rejected") {
+    return <ClosedSkillReceipt kind={review.kind} name={review.name} state={view.state} />;
   }
   return (
     <>
-      <Notice
-        actions={
-          <Button onClick={() => setOpen(true)} size="sm" type="button">
-            {view.stale ? "Review the latest" : "Review skill"}
-          </Button>
-        }
-        agent={agent}
-        body={
-          view.why ??
-          "I wrote down a procedure as a skill. Nothing in it runs until you approve it."
-        }
-        detail={
-          <div className="flex min-w-0 flex-col gap-3">
-            {view.stale ? (
-              <Alert variant="warning">
-                <AlertDescription>
-                  This changed after you opened it. Read the latest version before deciding.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            {review.lesson ? (
-              <p className="text-small-body text-muted-foreground" data-testid="skill-review-cue">
-                When: {review.lesson.cue}
-              </p>
-            ) : null}
-            <RunsAutomatically items={view.automatic} />
-          </div>
-        }
-        state="needs-you"
-        title={
-          review.kind === "edit"
-            ? `Change to review: ${review.name}`
-            : `New skill to review: ${review.name}`
-        }
-        when={when}
-      />
+      <PendingSkillNotice agent={agent} onReview={() => setOpen(true)} view={view} when={when} />
       {dialog}
     </>
   );

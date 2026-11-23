@@ -1,13 +1,12 @@
 /** S2: the lesson a skill proposal carries, with links to the sessions that show it. */
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import { Eyebrow, Pill } from "@compozy/ui";
 
-import { SessionNotFoundError, sessionOwnerOptions } from "@/systems/session";
-
 import type { AgentSkillLessonPayload } from "../../types";
+
+const NO_UNAVAILABLE_SESSIONS: readonly string[] = [];
 
 const CONFIDENCE_LABEL: Readonly<Record<string, string>> = {
   low: "Low confidence",
@@ -15,10 +14,9 @@ const CONFIDENCE_LABEL: Readonly<Record<string, string>> = {
   high: "High confidence",
 };
 
-/** A session the daemon no longer knows reads as unavailable; any other failure keeps the link. */
-function EvidenceSession({ id }: { id: string }) {
-  const owner = useQuery({ ...sessionOwnerOptions(id), refetchOnWindowFocus: false });
-  if (owner.error instanceof SessionNotFoundError) {
+/** A session the daemon no longer knows reads as unavailable; any other session stays a link. */
+function EvidenceSession({ id, unavailable }: { id: string; unavailable: boolean }) {
+  if (unavailable) {
     return (
       <span className="font-mono text-small-body text-muted-foreground">
         {id} <span className="font-sans">· Unavailable</span>
@@ -48,9 +46,12 @@ function LessonRow({ label, children }: { label: string; children: ReactNode }) 
 export function AgentSkillLesson({
   lesson,
   evidenceSessionIds,
+  unavailableSessionIds = NO_UNAVAILABLE_SESSIONS,
 }: {
   lesson: AgentSkillLessonPayload | null | undefined;
   evidenceSessionIds: readonly string[];
+  /** Evidence sessions the daemon no longer knows; the container resolves them. */
+  unavailableSessionIds?: readonly string[];
 }) {
   if (!lesson) {
     return (
@@ -59,6 +60,7 @@ export function AgentSkillLesson({
       </p>
     );
   }
+  const unavailable = new Set(unavailableSessionIds);
   return (
     <section aria-label="Lesson" className="flex flex-col gap-2" data-testid="skill-review-lesson">
       <div className="flex items-center gap-2">
@@ -76,7 +78,7 @@ export function AgentSkillLesson({
             <ul className="flex flex-wrap gap-x-3 gap-y-1">
               {evidenceSessionIds.map(id => (
                 <li key={id}>
-                  <EvidenceSession id={id} />
+                  <EvidenceSession id={id} unavailable={unavailable.has(id)} />
                 </li>
               ))}
             </ul>

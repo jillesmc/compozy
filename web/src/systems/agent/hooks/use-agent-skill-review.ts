@@ -24,6 +24,8 @@ import {
 } from "../lib/agent-skill-review";
 import { agentKeys } from "../lib/query-keys";
 import { agentSkillReviewOptions } from "../lib/query-options";
+import type { AgentSkillReviewPayload } from "../types";
+import { useUnavailableEvidenceSessions } from "./use-agent-skill-evidence";
 
 /**
  * One proposed skill and the operator's decision on it (S9). `ref` is `null` until the caller
@@ -59,30 +61,19 @@ export function useAgentSkillReview(ref: AgentSkillReviewRef | null) {
       void queryClient.invalidateQueries({ queryKey: skillKeys.all });
     },
     onError: (error, { digest }) => {
-      if (!ref) return;
-      if (isSkillReviewRevertConflict(error)) {
-        void queryClient.invalidateQueries({
-          queryKey: agentKeys.skillReview(ref.id, ref.profile),
-        });
-        return;
-      }
-      if (!isSkillReviewStale(error)) return;
-      setStaleDigest(digest);
+      // A refused revert or a stale digest rereads the review; only a stale one remembers the digest.
+      const stale = isSkillReviewStale(error);
+      if (!ref || !(stale || isSkillReviewRevertConflict(error))) return;
+      if (stale) setStaleDigest(digest);
       void queryClient.invalidateQueries({ queryKey: agentKeys.skillReview(ref.id, ref.profile) });
     },
   });
+  const unavailableEvidenceSessionIds = useUnavailableEvidenceSessions(
+    review?.evidence_session_ids
+  );
   const files = review ? skillReviewFiles(review) : [];
-  // The daemon marks a review whose stored draft no longer verifies; it can only be rejected.
-  const unreadable = review?.problem === "skill_review_invalid";
-  // An edit whose installed skill changed since the proposal can only be rejected.
-  const baseStale = isSkillReviewBaseStale(mutation.error);
-  // A pending edit whose base snapshot can't be read can't be reviewed, so it can only be rejected.
-  const snapshotInvalid =
-    review?.problem === "skill_review_snapshot_invalid" && skillReviewState(review) === "pending";
-  const invalid =
-    unreadable || baseStale || snapshotInvalid || isSkillReviewInvalid(mutation.error);
+  const { unreadable, snapshotInvalid, invalid } = reviewProblems(review, mutation.error);
   const installConflictOp = skillInstallConflictOp(mutation.error);
-  const baseAutomatic = review?.base_runs_automatically;
   return {
     review,
     loading: ref === null || (query.isPending && Boolean(ref.id)),
@@ -91,13 +82,9 @@ export function useAgentSkillReview(ref: AgentSkillReviewRef | null) {
     why: review ? skillReviewWhy(review) : undefined,
     automatic: review ? skillAutomaticItems(review, files) : [],
     /** Edit reviews: proposed and installed "Runs automatically" counts. */
-    automaticComparison:
-      review?.kind === "edit" && baseAutomatic
-        ? {
-            proposed: skillAutomaticSummary(review.runs_automatically),
-            installed: skillAutomaticSummary(baseAutomatic),
-          }
-        : undefined,
+    automaticComparison: automaticComparison(review),
+    /** Evidence sessions the daemon no longer knows: shown as unavailable, not as links. */
+    unavailableEvidenceSessionIds,
     state: review ? skillReviewState(review) : "pending",
     /** The detail says this approval can be reverted now; the daemon stays authoritative. */
     revertAllowed: review?.revert?.allowed === true,
@@ -116,6 +103,29 @@ export function useAgentSkillReview(ref: AgentSkillReviewRef | null) {
         mutation.mutate({ decision, digest: review.digest });
       }
     },
+  };
+}
+
+/** Why this version can only be rejected, from the review and the last refused decision. */
+function reviewProblems(review: AgentSkillReviewPayload | undefined, error: Error | null) {
+  // The daemon marks a review whose stored draft no longer verifies; it can only be rejected.
+  const unreadable = review?.problem === "skill_review_invalid";
+  // A pending edit whose base snapshot can't be read can't be reviewed, so it can only be rejected.
+  const snapshotInvalid =
+    review?.problem === "skill_review_snapshot_invalid" && skillReviewState(review) === "pending";
+  // An edit whose installed skill changed since the proposal can only be rejected.
+  const invalid =
+    unreadable || snapshotInvalid || isSkillReviewBaseStale(error) || isSkillReviewInvalid(error);
+  return { unreadable, snapshotInvalid, invalid };
+}
+
+/** Edit reviews: the proposed and installed "Runs automatically" counts. */
+function automaticComparison(review: AgentSkillReviewPayload | undefined) {
+  const installed = review?.kind === "edit" ? review.base_runs_automatically : undefined;
+  if (!review || !installed) return undefined;
+  return {
+    proposed: skillAutomaticSummary(review.runs_automatically),
+    installed: skillAutomaticSummary(installed),
   };
 }
 
