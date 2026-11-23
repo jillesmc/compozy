@@ -18,10 +18,15 @@ import (
 var ErrSkillReviewNoTarget = errors.New("skill_review_no_target")
 
 type SkillProposalInput struct {
-	Name               string
-	Description        string
-	Body               string
-	Files              []SkillDraftFile
+	Name        string
+	Description string
+	Body        string
+	// Files is the full set for new; for edit, the added or replaced text files.
+	Files []SkillDraftFile
+	// RemovePaths deletes base files of an edit; refused with mode new.
+	RemovePaths []string
+	// Mode defaults to new.
+	Mode               SkillProposalMode
 	Lesson             SkillLesson
 	EvidenceSessionIDs []string
 }
@@ -74,20 +79,21 @@ func (s *SkillProposalService) Propose(
 	if targetRoot == "" {
 		return SkillProposalResult{}, ErrSkillReviewNoTarget
 	}
-	draft, err := PrepareSkillDraft(input.Name, input.Description, input.Body, input.Files)
+	draft, err := prepareProposalDraft(input)
 	if err != nil {
 		return SkillProposalResult{}, err
 	}
 	if err := s.checkEvidenceSessions(ctx, instance, evidence); err != nil {
 		return SkillProposalResult{}, err
 	}
-	t, err := s.lockReconciledSkill(ctx, targetRoot, draft.Name)
+	t, blocked, err := s.lockReconciledSkill(ctx, targetRoot, draft.Name)
 	if err != nil {
 		return SkillProposalResult{}, err
 	}
 	defer func() { err = errors.Join(err, t.close()) }()
-	// Checked after Reconcile so an interrupted install is settled before the name is judged.
-	if err := refuseInstalledName(targetRoot, draft.Name); err != nil {
+	// Checked after Reconcile so an interrupted install is settled before the name or base is judged.
+	edit, err := checkProposalTarget(t, targetRoot, draft, blocked)
+	if err != nil {
 		return SkillProposalResult{}, err
 	}
 	id, err := store.NewID("skr")
@@ -98,9 +104,13 @@ func (s *SkillProposalService) Propose(
 	if err != nil {
 		return SkillProposalResult{}, err
 	}
-	path, digest, err := WriteSkillDraft(s.DraftRoot, s.ScanRoots, draft)
+	path, digest, snapshot, err := s.writeProposal(id, draft, edit)
 	if err != nil {
 		return SkillProposalResult{}, err
+	}
+	kind := SkillProposalNew
+	if draft.Mode == SkillProposalEdit {
+		kind = SkillProposalEdit
 	}
 	review, duplicate, err := s.Store.CreateReview(ctx, SkillReview{
 		ID:                 id,
@@ -112,15 +122,18 @@ func (s *SkillProposalService) Propose(
 		Digest:             digest,
 		DraftPath:          path,
 		SourceSessionID:    actor.SessionID,
-		Kind:               SkillProposalNew,
+		Kind:               kind,
 		SkillKey:           skillKeyFor(instance, t.root, draft.Name),
+		BaseDigest:         edit.baseDigest,
+		SnapshotPath:       snapshot,
+		ProposedDigest:     edit.proposedDigest,
 		Lesson:             lesson,
 		EvidenceSessionIDs: evidence,
 	}, report)
 	result := SkillProposalResult{Review: review, Duplicate: duplicate}
 	if errors.Is(err, ErrSkillReviewLimit) || errors.Is(err, ErrSkillProposePreviouslyRejected) ||
 		(err == nil && review.DraftPath != path) {
-		return result, errors.Join(err, os.Remove(path))
+		return result, errors.Join(err, os.Remove(path), removeSkillSnapshot(snapshot))
 	}
 	if err == nil {
 		slog.InfoContext(ctx, "skill.review.created", "instance_id", instance.ID, "review_id", review.ID,
@@ -128,6 +141,69 @@ func (s *SkillProposalService) Propose(
 	}
 	// An uncertain database commit must retain the inert draft for recovery.
 	return result, err
+}
+
+// prepareProposalDraft validates the proposal contents; an edit draft also records its mode and
+// remove_paths so they are part of the draft digest.
+func prepareProposalDraft(input SkillProposalInput) (SkillDraft, error) {
+	switch input.Mode {
+	case "", SkillProposalNew, SkillProposalEdit:
+	default:
+		return SkillDraft{}, fmt.Errorf("skill proposal mode %q must be new or edit", input.Mode)
+	}
+	removals, err := prepareSkillRemovePaths(input.Mode, input.RemovePaths, input.Files)
+	if err != nil {
+		return SkillDraft{}, err
+	}
+	draft, err := PrepareSkillDraft(input.Name, input.Description, input.Body, input.Files)
+	if err != nil {
+		return SkillDraft{}, err
+	}
+	if input.Mode == SkillProposalEdit {
+		draft.Mode, draft.RemovePaths = SkillProposalEdit, removals
+	}
+	return draft, nil
+}
+
+// checkProposalTarget applies Business Rule 4 under the skill locks: a new skill needs a free name; an
+// edit needs a settled, supported installed base and returns it with the resulting tree.
+func checkProposalTarget(
+	t *skillTarget,
+	targetRoot string,
+	draft SkillDraft,
+	blocked *SkillInstallPayload,
+) (skillEdit, error) {
+	if draft.Mode != SkillProposalEdit {
+		return skillEdit{}, refuseInstalledName(targetRoot, draft.Name)
+	}
+	if blocked != nil {
+		return skillEdit{}, skillInstallConflictError(draft.Name, blocked.OpID)
+	}
+	return prepareSkillEdit(t.dir, draft)
+}
+
+// writeProposal writes the inert draft and, for an edit, the base snapshot beside it.
+func (s *SkillProposalService) writeProposal(
+	id string,
+	draft SkillDraft,
+	edit skillEdit,
+) (path, digest, snapshot string, err error) {
+	path, digest, err = WriteSkillDraft(s.DraftRoot, s.ScanRoots, draft)
+	if err != nil || draft.Mode != SkillProposalEdit {
+		return path, digest, "", err
+	}
+	snapshot = skillSnapshotPath(path, id)
+	if err := writeSkillSnapshot(snapshot, edit.base, edit.baseDigest); err != nil {
+		return "", "", "", errors.Join(err, os.Remove(path))
+	}
+	return path, digest, snapshot, nil
+}
+
+func removeSkillSnapshot(path string) error {
+	if path == "" {
+		return nil
+	}
+	return os.RemoveAll(path)
 }
 
 // refuseInstalledName applies Business Rule 4 for a new skill: a name already present in the target
@@ -173,17 +249,21 @@ func skillKeyFor(instance Instance, root, name string) SkillKey {
 
 // lockReconciledSkill holds both skill locks and runs Reconcile before a review is created, so a
 // skill another process is changing refuses the proposal (skill_install_busy) with no review.
-func (s *SkillProposalService) lockReconciledSkill(ctx context.Context, targetRoot, name string) (*skillTarget, error) {
+// The returned payload is the skill's unresolved conflict, if any.
+func (s *SkillProposalService) lockReconciledSkill(
+	ctx context.Context,
+	targetRoot, name string,
+) (*skillTarget, *SkillInstallPayload, error) {
 	t, err := s.acquireSkill(ctx, targetRoot, name, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	_, warning, err := s.reconcileSkill(ctx, t)
+	blocked, warning, err := s.reconcileSkill(ctx, t)
 	if err != nil {
-		return nil, errors.Join(err, t.close())
+		return nil, nil, errors.Join(err, t.close())
 	}
 	if warning != nil {
 		slog.WarnContext(ctx, "skill.install.projection_failed", "skill", name, "error", warning)
 	}
-	return t, nil
+	return t, blocked, nil
 }

@@ -9129,8 +9129,19 @@ export interface components {
       mcp_servers: number;
       scripts: number;
     };
+    AgentSkillBaseFile: {
+      binary?: boolean;
+      content?: string;
+      path: string;
+      /** Format: int64 */
+      size?: number;
+    };
     AgentSkillDraftFile: {
       content: string;
+      path: string;
+    };
+    AgentSkillFileChange: {
+      change: string;
       path: string;
     };
     AgentSkillLesson: {
@@ -9145,6 +9156,9 @@ export interface components {
     AgentSkillReviewPayload: {
       agent: string;
       base_digest?: string;
+      base_files?: components["schemas"]["AgentSkillBaseFile"][];
+      base_runs_automatically?: components["schemas"]["AgentSkillAutomaticContents"] | null;
+      changes?: components["schemas"]["AgentSkillFileChange"][];
       /** Format: date-time */
       created_at: string;
       /** Format: date-time */

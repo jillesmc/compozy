@@ -34,9 +34,14 @@ type SkillDraftFile struct {
 	Content string `json:"content"`
 }
 
+// SkillDraft is the stored proposal. For an edit, Files are the regenerated SKILL.md plus added or
+// replaced files, and Mode and RemovePaths are recorded so the draft digest (proposal identity) covers
+// them; both are omitted for new skills, keeping their digests unchanged.
 type SkillDraft struct {
-	Name  string           `json:"name"`
-	Files []SkillDraftFile `json:"files"`
+	Name        string            `json:"name"`
+	Files       []SkillDraftFile  `json:"files"`
+	Mode        SkillProposalMode `json:"mode,omitempty"`
+	RemovePaths []string          `json:"remove_paths,omitempty"`
 }
 
 func PrepareSkillDraft(name, description, body string, files []SkillDraftFile) (SkillDraft, error) {

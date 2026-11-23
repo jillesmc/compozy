@@ -188,6 +188,8 @@ func (api *AgentInstanceAPI) ProposeSkill(
 		Name:        input.Name,
 		Description: input.Description,
 		Body:        input.Body,
+		Mode:        agentinstance.SkillProposalMode(input.Mode),
+		RemovePaths: input.RemovePaths,
 		Lesson: agentinstance.SkillLesson{
 			Cue:        input.Lesson.Cue,
 			Lesson:     input.Lesson.Lesson,
@@ -225,6 +227,9 @@ var skillReviewErrorStatuses = []struct {
 	{ErrSkillReviewInvalidCursor, 422},
 	{agentinstance.ErrSkillReviewTargetExists, 409}, {agentinstance.ErrSkillInstallBusy, 409},
 	{agentinstance.ErrSkillInstallConflict, 409},
+	{agentinstance.ErrSkillReviewBaseStale, 409}, {agentinstance.ErrSkillReviewBaseMissing, 409},
+	{agentinstance.ErrSkillReviewBaseUnsupported, 422}, {agentinstance.ErrSkillProposeNoChange, 409},
+	{agentinstance.ErrSkillProposeInvalidRemove, 422},
 }
 
 // SkillReviewErrorStatus returns the stable code and HTTP status of a skill review domain error.

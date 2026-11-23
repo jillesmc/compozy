@@ -7,6 +7,27 @@ import (
 	"time"
 )
 
+// CmdPaletteViewEnvelope is a daemon API value.
+type CmdPaletteViewEnvelope struct {
+	ProfileLens ProfileLens `json:"profile_lens"`
+	ViewID      string      `json:"view_id"`
+	Title       string      `json:"title"`
+	Kind        ViewKind    `json:"kind"`
+	Revision    string      `json:"revision"`
+	StreamEpoch string      `json:"stream_epoch"`
+	Payload     ViewPayload `json:"payload"`
+}
+
+// CmdPaletteViewPatch is a daemon API value.
+type CmdPaletteViewPatch struct {
+	Sequence    int64        `json:"sequence"`
+	StreamEpoch string       `json:"stream_epoch"`
+	Patch       *ViewPatch   `json:"patch,omitzero"`
+	Payload     *ViewPayload `json:"payload,omitzero"`
+	Revision    string       `json:"revision"`
+	Reset       bool         `json:"reset,omitzero"`
+}
+
 // CmdPaletteViewSessionAccepted is a daemon API value.
 type CmdPaletteViewSessionAccepted struct {
 	Accepted bool `json:"accepted"`
@@ -427,21 +448,3 @@ type CreateWorktreeRequest struct {
 
 // CriterionType is a daemon API value.
 type CriterionType string
-
-// CursorPagePayload is a daemon API value.
-type CursorPagePayload struct {
-	NextCursor string `json:"next_cursor,omitempty"`
-	HasMore    bool   `json:"has_more"`
-	Limit      int    `json:"limit"`
-}
-
-// DaemonIdentityPayload is a daemon API value.
-type DaemonIdentityPayload struct {
-	PID         int                     `json:"pid"`
-	StartedAt   time.Time               `json:"started_at"`
-	HTTPHost    string                  `json:"http_host"`
-	HTTPPort    int                     `json:"http_port"`
-	UserHomeDir string                  `json:"user_home_dir"`
-	Version     string                  `json:"version"`
-	Readiness   *DaemonReadinessPayload `json:"readiness,omitzero"`
-}
